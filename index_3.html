@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>세포 배양실 SOP</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>body{margin:0}</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+/* Claude 전용 window.storage → 브라우저 localStorage 로 대체 */
+window.storage = {
+  get: async (key) => {
+    const v = localStorage.getItem(key);
+    if (v === null) throw new Error("not found");
+    return { key, value: v };
+  },
+  set: async (key, value) => { localStorage.setItem(key, value); return { key, value }; },
+};
+</script>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+
+/* ── 디자인 토큰 ── */
+const C = {
+  primary: "#2563EB", text: "#1F2937", textSec: "#6B7280",
+  border: "#E5E7EB", bg: "#FFFFFF", bgSubtle: "#F9FAFB",
+  danger: "#DC2626", success: "#16A34A",
+};
+const FONT = "'Pretendard', -apple-system, 'Noto Sans KR', sans-serif";
+
+/* 교수님 확인 모드 비밀번호 */
+const PROF_PW = "0000";
+
+/* ══════════ SOP 원문 (사진 그대로) ══════════ */
+
+const ROUTINE = [
+  "Suction 폐액통 확인 → 50% 이상이면 즉시 폐기 및 교체",
+  "바이오해저드 폐기물 → 확인 후 반드시 제거",
+  "클린벤치 → 70% 에탄올로 닦기 (왼쪽→오른쪽, 안쪽→바깥쪽)",
+  "워터배스 → 주변 물기 완전히 건조",
+  "에탄올 → 50% 이하 시 즉시 보충",
+  "실험대 → 정해진 배치로 원상복구 (변형 금지)",
+  "실험장 → 라벨링 된 곳에 정확한 물건 정렬하여 보관",
+];
+
+const ZONES = [
+  { name: "워터배스", items: ["물기 없게 하기", "빨간색 링 똑같이 정리", "휴지 비축"] },
+  {
+    name: "워터배스 쪽 개수대",
+    items: ["사진과 같은 위치에 정리", "매스실린더, 비커는 호일로 감싸 보관", "Autoclave 물 확인 및 관리"],
+  },
+  { name: "현미경 구역", items: ["현미경 쪽 무조건 1개 에탄올 비치"] },
+  {
+    name: "클린벤치 옆 장",
+    items: ["사진과 똑같이 정리", "위에 휴지 비치", "15 mL, 50 mL conical tube 비치", "Autopipette tip 비치", "1개의 에탄올", "Glove"],
+  },
+  { name: "입구 쪽 개수대", items: ["사진과 똑같이 정리", "에탄올 관리"] },
+  {
+    name: "클린벤치",
+    items: [
+      "사진과 똑같이 정리",
+      "Autopipette – tube rack – 50 mL rack – 15 mL rack – ep tube – tip – waste – pipette",
+      "Suction waste 50% 이상일때 비우고 락스 처리 후 결합",
+    ],
+  },
+];
+
+const RULES = [
+  "Complete media: 개인이 직접 제조 + 이름/날짜 라벨링 (DMEM only 는 2학기 조교 제조)",
+  "Trypsin: 개인 aliquot 만 사용 + 이름 라벨링",
+  "소모품: 마지막 사용자가 즉시 보충",
+  "팁 다 쓴 것 실험장 보관",
+  "라벨/이름 없는 시약, 물품 + 종이 프로토콜 예고 없이 폐기 가능",
+  "해동된 FBS/antibiotics 방치 금지",
+  "가온된 배지 방치 금지",
+  "현미경 light 끄기",
+];
+
+const MANAGER = [
+  "세포 실험 끝내고 무조건 교수에게 확인 (모든 실험 시 강의 + 강의 이외)",
+  "교수가 부재 시 기다렸다가 확인 후 귀가 (9:00 – 18:00 사이에 실험 진행)",
+];
+
+const PENALTY_EXAMPLES = [
+  "필요버퍼 제작", "필요한 시약 aliquot", "동물세포 실험실 모든 폐액 처리",
+  "동물세포 실험실 모든 에탄올 보충", "동물세포 실험실 쓰레기 처리",
+  "동물세포 실험실 모든 후드 전체 청소", "동물세포 실험실 전체 청소",
+  "워터배스 물갈이", "Tip/tube 정리 후 autoclave", "Incubator 청소",
+];
+
+const TIMES = ["09:00","09:30","10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30"];
+
+/* ── 공통 컴포넌트 ── */
+function Check({ checked, onToggle, label }) {
+  return (
+    <button onClick={onToggle} style={{
+      display: "flex", alignItems: "flex-start", gap: 12, width: "100%",
+      padding: "12px 0", background: "none", border: "none", cursor: "pointer",
+      textAlign: "left", fontFamily: FONT,
+    }}>
+      <span style={{
+        width: 24, height: 24, minWidth: 24, borderRadius: 8, marginTop: 1,
+        border: `1px solid ${checked ? C.success : C.border}`,
+        background: checked ? C.success : C.bg,
+        display: "flex", alignItems: "center", justifyContent: "center", transition: "all .15s",
+      }}>
+        {checked && (
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M3.5 8.5l3 3 6-7" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+      </span>
+      <span style={{
+        fontSize: 16, lineHeight: 1.6, color: checked ? C.textSec : C.text,
+        textDecoration: checked ? "line-through" : "none",
+      }}>{label}</span>
+    </button>
+  );
+}
+
+function Card({ children, style }) {
+  return (
+    <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, ...style }}>
+      {children}
+    </div>
+  );
+}
+
+const inputStyle = {
+  height: 44, width: "100%", boxSizing: "border-box", padding: "0 12px",
+  border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 16,
+  fontFamily: FONT, outline: "none", background: C.bg, color: C.text,
+};
+const labelStyle = { fontSize: 12, fontWeight: 500, color: C.textSec, display: "block", marginBottom: 8 };
+
+/* ══════════ 메인 앱 ══════════ */
+function SopApp() {
+  const [tab, setTab] = useState("check");
+
+  /* 퇴실 체크 */
+  const [name, setName] = useState("");
+  const [checks, setChecks] = useState({});
+  const [saved, setSaved] = useState(false);
+  const [records, setRecords] = useState([]);
+
+  /* 예약 */
+  const [rvName, setRvName] = useState("");
+  const [rvReason, setRvReason] = useState("");
+  const [rvDate, setRvDate] = useState("");
+  const [rvTime, setRvTime] = useState("");
+  const [rvError, setRvError] = useState("");
+  const [rvDone, setRvDone] = useState(false);
+  const [reservations, setReservations] = useState([]);
+  const [myName, setMyName] = useState("");
+  const [myQuery, setMyQuery] = useState("");
+  const [profMode, setProfMode] = useState(false);
+  const [pwInput, setPwInput] = useState("");
+  const [pwError, setPwError] = useState("");
+
+  const allKeys = [
+    ...ROUTINE.map((_, i) => `r${i}`),
+    ...ZONES.flatMap((z, zi) => z.items.map((_, i) => `z${zi}-${i}`)),
+  ];
+  const done = allKeys.filter((k) => checks[k]).length;
+  const total = allKeys.length;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  const complete = pct === 100;
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get("sop-records", true);
+        if (r?.value) setRecords(JSON.parse(r.value));
+      } catch { /* 기록 없음 */ }
+      try {
+        const v = await window.storage.get("sop-reservations", true);
+        if (v?.value) setReservations(JSON.parse(v.value));
+      } catch { /* 예약 없음 */ }
+    })();
+  }, []);
+
+  const toggle = (k) => { setChecks((p) => ({ ...p, [k]: !p[k] })); setSaved(false); };
+
+  const finish = async () => {
+    const rec = {
+      name: name.trim() || "이름 미입력",
+      date: new Date().toLocaleString("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
+    };
+    const next = [rec, ...records].slice(0, 100);
+    setRecords(next); setSaved(true);
+    try { await window.storage.set("sop-records", JSON.stringify(next), true); } catch (e) { console.error(e); }
+  };
+
+  const submitReservation = async () => {
+    setRvError(""); setRvDone(false);
+    if (!rvName.trim()) return setRvError("학생 이름을 입력해 주세요.");
+    if (!rvReason.trim()) return setRvError("사유를 입력해 주세요.");
+    if (!rvDate) return setRvError("날짜를 선택해 주세요.");
+    if (!rvTime) return setRvError("시간을 선택해 주세요.");
+    const day = new Date(rvDate + "T00:00:00").getDay();
+    if (day === 0 || day === 6) return setRvError("주말은 예약할 수 없습니다. 실험은 월–금요일만 가능합니다.");
+    const next = [{
+      id: Date.now(), name: rvName.trim(), reason: rvReason.trim(),
+      date: rvDate, time: rvTime, status: "대기",
+    }, ...reservations].slice(0, 100);
+    setReservations(next); setRvDone(true);
+    setRvReason(""); setRvDate(""); setRvTime("");
+    try { await window.storage.set("sop-reservations", JSON.stringify(next), true); } catch (e) { console.error(e); }
+  };
+
+  const setStatus = async (id, status) => {
+    const next = reservations.map((r) => (r.id === id ? { ...r, status } : r));
+    setReservations(next);
+    try { await window.storage.set("sop-reservations", JSON.stringify(next), true); } catch (e) { console.error(e); }
+  };
+
+  const tryProfLogin = () => {
+    if (pwInput === PROF_PW) { setProfMode(true); setPwError(""); setPwInput(""); }
+    else setPwError("비밀번호가 올바르지 않습니다.");
+  };
+
+  const statusColor = { "대기": C.textSec, "승인": C.success, "반려": C.danger };
+  const statusLabel = (s) => s === "승인" ? "승인 ✓ (대면 확인 불필요)" : s === "반려" ? "반려" : "승인 대기중";
+  const myReservations = myQuery ? reservations.filter((r) => r.name === myQuery) : [];
+
+  const tabs = [
+    { id: "check", label: "퇴실 체크" },
+    { id: "reserve", label: "실험 예약" },
+    { id: "rules", label: "규칙" },
+    { id: "log", label: "기록" },
+  ];
+
+  return (
+    <div style={{ fontFamily: FONT, background: C.bgSubtle, minHeight: "100vh", color: C.text }}>
+      <header style={{ height: 64, background: C.bg, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 10 }}>
+        <div style={{
+          maxWidth: 1200, margin: "0 auto", padding: "0 16px", height: "100%",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+        }}>
+          <span style={{ fontSize: 20, fontWeight: 600 }}>🧫 세포 배양실 SOP</span>
+          <span style={{ fontSize: 12, fontWeight: 500, color: C.textSec }}>Standard Operating Procedure</span>
+        </div>
+      </header>
+
+      <nav style={{ background: C.bg, borderBottom: `1px solid ${C.border}`, overflowX: "auto" }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 16px", display: "flex", gap: 8 }}>
+          {tabs.map((t) => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              height: 40, padding: "0 16px", fontSize: 14, fontFamily: FONT, whiteSpace: "nowrap",
+              background: "none", border: "none", cursor: "pointer",
+              fontWeight: tab === t.id ? 600 : 400,
+              color: tab === t.id ? C.primary : C.textSec,
+              borderBottom: `2px solid ${tab === t.id ? C.primary : "transparent"}`,
+            }}>{t.label}</button>
+          ))}
+        </div>
+      </nav>
+
+      <main style={{ maxWidth: 1200, margin: "0 auto", padding: `24px 16px ${tab === "check" ? "160px" : "48px"}` }}>
+
+        {/* ══ 퇴실 체크 ══ */}
+        {tab === "check" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <Card>
+              <label style={labelStyle}>체크하는 사람</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="이름 입력" style={inputStyle} />
+            </Card>
+
+            <Card>
+              <h2 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.3, margin: 0 }}>실험 종료 후 필수 루틴</h2>
+              <p style={{ fontSize: 14, color: C.textSec, margin: "8px 0 8px" }}>(실험 후 매번 반드시 수행)</p>
+              <div style={{ borderTop: `1px solid ${C.border}` }}>
+                {ROUTINE.map((item, i) => (
+                  <Check key={i} checked={!!checks[`r${i}`]} onToggle={() => toggle(`r${i}`)} label={item} />
+                ))}
+              </div>
+            </Card>
+
+            {ZONES.map((zone, zi) => {
+              const zDone = zone.items.filter((_, i) => checks[`z${zi}-${i}`]).length;
+              return (
+                <Card key={zi}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                    <h3 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>&lt;{zone.name}&gt;</h3>
+                    <span style={{ fontSize: 12, fontWeight: 500, color: zDone === zone.items.length ? C.success : C.textSec }}>
+                      {zDone === zone.items.length ? "완료" : `${zDone}/${zone.items.length}`}
+                    </span>
+                  </div>
+                  <div style={{ borderTop: `1px solid ${C.border}` }}>
+                    {zone.items.map((item, i) => (
+                      <Check key={i} checked={!!checks[`z${zi}-${i}`]} onToggle={() => toggle(`z${zi}-${i}`)} label={item} />
+                    ))}
+                  </div>
+                </Card>
+              );
+            })}
+
+            <button onClick={() => { setChecks({}); setSaved(false); }} style={{
+              height: 40, padding: "0 16px", fontSize: 14, fontFamily: FONT,
+              background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8,
+              color: C.textSec, cursor: "pointer", alignSelf: "flex-start",
+            }}>전체 초기화</button>
+          </div>
+        )}
+
+        {/* ══ 실험 예약 ══ */}
+        {tab === "reserve" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <Card style={{ borderColor: C.primary, background: "#EFF6FF" }}>
+              <p style={{ fontSize: 14, lineHeight: 1.5, margin: 0 }}>
+                📅 실험 예약은 <strong>월–금요일, 9:00 – 18:00 사이</strong>에만 가능합니다.<br />
+                교수님이 승인하면 대면 확인 없이 예약이 확정됩니다.
+              </p>
+            </Card>
+
+            <Card>
+              <h2 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.3, margin: "0 0 16px" }}>예약 신청</h2>
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <div>
+                  <label style={labelStyle}>학생 이름</label>
+                  <input value={rvName} onChange={(e) => setRvName(e.target.value)} placeholder="이름 입력" style={inputStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>사유</label>
+                  <input value={rvReason} onChange={(e) => setRvReason(e.target.value)} placeholder="예: subculture, media 제조" style={inputStyle} />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div>
+                    <label style={labelStyle}>날짜 (월–금)</label>
+                    <input type="date" value={rvDate} onChange={(e) => setRvDate(e.target.value)} style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>시간 (9:00–18:00)</label>
+                    <select value={rvTime} onChange={(e) => setRvTime(e.target.value)} style={inputStyle}>
+                      <option value="">선택</option>
+                      {TIMES.map((t) => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                </div>
+                {rvError && <p style={{ fontSize: 14, color: C.danger, margin: 0 }}>{rvError}</p>}
+                {rvDone && <p style={{ fontSize: 14, color: C.success, margin: 0 }}>예약 신청 완료 — 아래 "내 예약 확인"에서 승인 여부를 확인하세요.</p>}
+                <button onClick={submitReservation} style={{
+                  height: 48, borderRadius: 8, fontSize: 16, fontWeight: 600, fontFamily: FONT,
+                  border: "none", background: C.primary, color: "#fff", cursor: "pointer",
+                }}>예약 신청하기</button>
+              </div>
+            </Card>
+
+            {/* 학생용: 본인 예약만 조회 */}
+            <Card>
+              <h2 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.3, margin: "0 0 8px" }}>내 예약 확인</h2>
+              <p style={{ fontSize: 14, color: C.textSec, margin: "0 0 16px" }}>
+                신청할 때 쓴 이름을 입력하면 본인 예약의 승인 여부만 표시됩니다.
+              </p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={myName} onChange={(e) => setMyName(e.target.value)} placeholder="이름 입력" style={{ ...inputStyle, flex: 1 }} />
+                <button onClick={() => setMyQuery(myName.trim())} style={{
+                  height: 44, padding: "0 16px", fontSize: 14, fontWeight: 600, fontFamily: FONT,
+                  borderRadius: 8, border: "none", background: C.primary, color: "#fff", cursor: "pointer", whiteSpace: "nowrap",
+                }}>조회</button>
+              </div>
+              {myQuery && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 16 }}>
+                  {myReservations.length === 0 ? (
+                    <p style={{ fontSize: 16, color: C.textSec, margin: 0 }}>'{myQuery}' 이름으로 신청된 예약이 없습니다.</p>
+                  ) : (
+                    myReservations.map((r) => (
+                      <div key={r.id} style={{ border: `1px solid ${C.border}`, borderRadius: 12, padding: 16 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontSize: 16, fontWeight: 600 }}>{r.date} · {r.time}</span>
+                          <span style={{ fontSize: 12, fontWeight: 500, color: statusColor[r.status] }}>{statusLabel(r.status)}</span>
+                        </div>
+                        <p style={{ fontSize: 14, color: C.textSec, margin: "8px 0 0" }}>{r.reason}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </Card>
+
+            {/* 교수님 전용 */}
+            <Card>
+              <h2 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.3, margin: "0 0 16px" }}>교수님 확인 (전체 예약)</h2>
+              {!profMode ? (
+                <div>
+                  <p style={{ fontSize: 14, color: C.textSec, margin: "0 0 16px" }}>
+                    전체 예약 목록과 승인/반려는 교수님만 볼 수 있습니다. 비밀번호를 입력하세요.
+                  </p>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input type="password" value={pwInput} onChange={(e) => setPwInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && tryProfLogin()}
+                      placeholder="비밀번호" style={{ ...inputStyle, flex: 1 }} />
+                    <button onClick={tryProfLogin} style={{
+                      height: 44, padding: "0 16px", fontSize: 14, fontWeight: 600, fontFamily: FONT,
+                      borderRadius: 8, border: "none", background: C.primary, color: "#fff", cursor: "pointer", whiteSpace: "nowrap",
+                    }}>입장</button>
+                  </div>
+                  {pwError && <p style={{ fontSize: 14, color: C.danger, margin: "8px 0 0" }}>{pwError}</p>}
+                </div>
+              ) : (
+                <div>
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+                    <button onClick={() => setProfMode(false)} style={{
+                      height: 32, padding: "0 12px", fontSize: 12, fontWeight: 500, fontFamily: FONT,
+                      borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.textSec, cursor: "pointer",
+                    }}>나가기</button>
+                  </div>
+                  {reservations.length === 0 ? (
+                    <p style={{ fontSize: 16, color: C.textSec, margin: 0 }}>아직 예약 신청이 없습니다.</p>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                      {reservations.map((r) => (
+                        <div key={r.id} style={{ border: `1px solid ${C.border}`, borderRadius: 12, padding: 16 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span style={{ fontSize: 16, fontWeight: 600 }}>{r.name}</span>
+                            <span style={{ fontSize: 12, fontWeight: 500, color: statusColor[r.status] }}>{statusLabel(r.status)}</span>
+                          </div>
+                          <p style={{ fontSize: 14, color: C.textSec, margin: "8px 0 0" }}>{r.date} · {r.time} — {r.reason}</p>
+                          {r.status === "대기" && (
+                            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                              <button onClick={() => setStatus(r.id, "승인")} style={{
+                                height: 32, padding: "0 12px", fontSize: 12, fontWeight: 500, fontFamily: FONT,
+                                borderRadius: 8, border: "none", background: C.success, color: "#fff", cursor: "pointer",
+                              }}>승인</button>
+                              <button onClick={() => setStatus(r.id, "반려")} style={{
+                                height: 32, padding: "0 12px", fontSize: 12, fontWeight: 500, fontFamily: FONT,
+                                borderRadius: 8, border: `1px solid ${C.danger}`, background: C.bg, color: C.danger, cursor: "pointer",
+                              }}>반려</button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
+
+        {/* ══ 규칙 ══ */}
+        {tab === "rules" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <Card>
+              <h2 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.3, margin: "0 0 16px" }}>
+                세포 배양실 SOP (Standard Operating Procedure)
+              </h2>
+              <ul style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+                <li style={{ fontSize: 16, lineHeight: 1.6 }}>업무의 효율성, 정확성 안정성을 높이기 위한 절차</li>
+                <li style={{ fontSize: 16, lineHeight: 1.6 }}>원칙: 규정을 지키지 않을 시 업무 증가. 개인별 책임.</li>
+                <li style={{ fontSize: 16, lineHeight: 1.6 }}>준비물: 발가락이 막혀있는 슬리퍼 또는 슬립온 (세포배양실용)</li>
+              </ul>
+            </Card>
+
+            <Card>
+              <h2 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.3, margin: "0 0 16px" }}>개인 책임 규칙 (예외 없음)</h2>
+              <ul style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+                {RULES.map((r, i) => <li key={i} style={{ fontSize: 16, lineHeight: 1.6 }}>{r}</li>)}
+              </ul>
+            </Card>
+
+            <Card>
+              <h2 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.3, margin: "0 0 16px" }}>담당자 제도 (교수)</h2>
+              <ul style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+                {MANAGER.map((r, i) => <li key={i} style={{ fontSize: 16, lineHeight: 1.6 }}>{r}</li>)}
+              </ul>
+            </Card>
+
+            <Card>
+              <h2 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.3, margin: "0 0 16px" }}>최종 사용자 전면 책임 규칙</h2>
+              <p style={{ fontSize: 16, lineHeight: 1.6, margin: 0 }}>
+                마지막 퇴실자가 실험실 상태에 대한 전면 책임<br />
+                강의가 아닌 시간에 subculture/실험 진행 시 마지막 사람이 전면 책임
+              </p>
+            </Card>
+
+            <Card style={{ borderColor: C.danger, background: "#FEF2F2" }}>
+              <h3 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 8px", color: C.danger }}>⚠ 페널티 = 업무 증가</h3>
+              <p style={{ fontSize: 16, lineHeight: 1.6, margin: "0 0 16px" }}>
+                위 규정이 지켜지지 않을 시 한 사람이 &lt;예시&gt;에 있는 일 중 4가지 처리
+              </p>
+              <p style={{ fontSize: 14, fontWeight: 500, color: C.textSec, margin: "0 0 8px" }}>예시&gt;</p>
+              <ul style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+                {PENALTY_EXAMPLES.map((p, i) => <li key={i} style={{ fontSize: 16, lineHeight: 1.6 }}>{p}</li>)}
+              </ul>
+            </Card>
+          </div>
+        )}
+
+        {/* ══ 기록 ══ */}
+        {tab === "log" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <h2 style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.3, margin: 0 }}>퇴실 체크 완료 기록</h2>
+            {records.length === 0 ? (
+              <Card style={{ textAlign: "center" }}>
+                <p style={{ fontSize: 16, color: C.textSec, margin: 0 }}>
+                  아직 기록이 없습니다.<br />퇴실 체크를 100% 완료하면 여기에 저장됩니다.
+                </p>
+              </Card>
+            ) : (
+              records.map((r, i) => (
+                <Card key={i} style={{ padding: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 600 }}>{r.name}</div>
+                    <div style={{ fontSize: 14, color: C.textSec, marginTop: 4 }}>{r.date}</div>
+                  </div>
+                  <span style={{ fontSize: 14, fontWeight: 500, color: C.success }}>완료 ✓</span>
+                </Card>
+              ))
+            )}
+          </div>
+        )}
+      </main>
+
+      {tab === "check" && (
+        <div style={{
+          position: "fixed", bottom: 0, left: 0, right: 0,
+          background: C.bg, borderTop: `1px solid ${C.border}`, padding: "12px 16px 16px",
+        }}>
+          <div style={{ maxWidth: 1200, margin: "0 auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+              <span style={{ fontSize: 14, color: C.textSec }}>{done} / {total} 항목</span>
+              <span style={{ fontSize: 14, fontWeight: 600, color: complete ? C.success : C.primary }}>{pct}%</span>
+            </div>
+            <div style={{ height: 8, borderRadius: 8, background: C.bgSubtle, overflow: "hidden", border: `1px solid ${C.border}` }}>
+              <div style={{
+                height: "100%", width: `${pct}%`,
+                background: complete ? C.success : C.primary, transition: "width .25s",
+              }} />
+            </div>
+            <button onClick={finish} disabled={!complete || saved} style={{
+              marginTop: 12, height: 48, width: "100%", borderRadius: 8,
+              fontSize: 16, fontWeight: 600, fontFamily: FONT, border: "none",
+              cursor: complete && !saved ? "pointer" : "default",
+              background: saved ? C.success : complete ? C.primary : C.border,
+              color: saved || complete ? "#fff" : C.textSec, transition: "background .15s",
+            }}>
+              {saved ? "저장 완료 — 교수님 확인 후 귀가 ✓" : complete ? "체크 완료하고 기록 남기기" : "모든 항목을 체크하면 완료할 수 있어요"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<SopApp />);
+</script>
+</body>
+</html>
